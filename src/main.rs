@@ -29,14 +29,13 @@ fn main() -> eframe::Result<()> {
         viewport: ViewportBuilder::default()
             .with_inner_size([900.0, 600.0])
             .with_title("NovaCibes Editor")
-            .with_resizable(true)
-            .with_vsync(true),
+            .with_resizable(true),
         ..Default::default()
     };
 
     eframe::run_native(
         "NovaCibes Editor",
         options,
-        Box::new(|_cc| Box::new(App::default())),
+        Box::new(|_cc| Ok(Box::new(App::default()))),
     )
 }
