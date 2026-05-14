@@ -1,4 +1,4 @@
-name: Build NovaCibes Python Runner (macOS)
+name: Build NovaCibes Python Runner (macOS Intel)
 
 on:
   push:
@@ -7,6 +7,9 @@ on:
       - master
   pull_request:
   workflow_dispatch:
+
+env:
+  MACOSX_DEPLOYMENT_TARGET: "11.0"
 
 jobs:
   build:
@@ -18,39 +21,35 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
 
       - name: Cache Cargo registry + build
         uses: Swatinem/rust-cache@v2
 
-      - name: Build release binary
-        run: cargo build --release --verbose
+      - name: Build release binary for Intel
+        run: cargo build --release --verbose --target x86_64-apple-darwin
 
       - name: Prepare artifact
         run: |
           mkdir -p dist
-          set -euo pipefail
-          mkdir -p dist
-
-          BIN_PATH="$(find target/release -maxdepth 1 -type f -perm -111 \
+          BIN_PATH="$(find target/x86_64-apple-darwin/release -maxdepth 1 -type f -perm -111 \
             ! -name '*.d' \
             ! -name '*.rlib' \
             ! -name '*.rmeta' \
             | head -n 1)"
-
           if [ -z "$BIN_PATH" ]; then
-            echo "No release binary found in target/release"
-            ls -la target/release
+            echo "No release binary found"
+            ls -la target/x86_64-apple-darwin/release
             exit 1
           fi
-
-          BIN_NAME="$(basename "$BIN_PATH")"
-          cp "$BIN_PATH" "dist/$BIN_NAME"
-          chmod +x "dist/$BIN_NAME"
+          cp "$BIN_PATH" dist/
+          chmod +x dist/*
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: novacibes-macos-build
+          name: novacibes-macos-intel
           path: dist/
 
   release:
@@ -62,11 +61,12 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
+          name: novacibes-macos-intel
           path: release-artifacts
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release-artifacts/**/*
+          files: release-artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
