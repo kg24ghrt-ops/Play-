@@ -1,6 +1,6 @@
 use fltk::{
     app, dialog,
-    enums::{Color, FrameType, MenuBarType, Shortcut},
+    enums::{Color, FrameType, Shortcut},
     frame::Frame,
     menu,
     prelude::*,
@@ -80,7 +80,7 @@ fn main() {
 
     // --- Menu bar ---
     let mut menu_bar = menu::MenuBar::default()
-        .with_type(MenuBarType::Normal)
+        .with_type(menu::MenuBarType::Normal)   // <-- fixed
         .with_pos(0, 0);
     menu_bar.add(
         "&File/&Settings\t",
@@ -90,7 +90,6 @@ fn main() {
             let config = config.clone();
             let connected = connected.clone();
             move |_| {
-                // password now requires a default value (empty string)
                 let token = dialog::password(400, 200, "Enter your Hugging Face token", "")
                     .unwrap_or_default();
                 if token.is_empty() {
