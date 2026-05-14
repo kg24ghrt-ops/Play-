@@ -13,4 +13,22 @@ serde_json = "1"
 rfd = "0.14"
 directories = "5"
 syntect = "5"
-egui_code_editor = "0.2.27"
+egui_code_editor = "0.2"   # Fixed: use 0.2.x (latest is 0.2.27)
+
+# Optimize the final binary for size and speed (optional)
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = "z"
+
+# Metadata for cargo-bundle (required to create .app bundle)
+[package.metadata.bundle]
+name = "NovaCibes Editor"
+identifier = "com.novacibes.editor"
+version = "0.1.0"
+category = "Developer Tool"
+copyright = "Copyright © 2025 NovaCibes"
+osx_minimum_system_version = "11.0"
+
+# Optional: add an app icon (place an .icns file in assets/icon.icns)
+# icon = ["assets/icon.icns"]
