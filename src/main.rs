@@ -1,89 +1,182 @@
-name: Build NovaCibes Python Runner (Universal macOS)
+use fltk::{
+    app, dialog,
+    enums::{Color, FrameType, Shortcut},
+    frame::Frame,
+    menu::{self, MenuFlag},
+    prelude::*,
+    window::Window,
+};
+use serde::{Deserialize, Serialize};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    thread,
+};
 
-on:
-  push:
-    branches:
-      - main
-      - master
-  pull_request:
-  workflow_dispatch:
+// ---------- Configuration ----------
+#[derive(Serialize, Deserialize, Clone)]
+struct Config {
+    token: String,
+}
 
-jobs:
-  build:
-    runs-on: macos-latest
+impl Default for Config {
+    fn default() -> Self {
+        Self { token: String::new() }
+    }
+}
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+fn config_path() -> PathBuf {
+    let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+    path.push("novacibes");
+    fs::create_dir_all(&path).ok();
+    path.push("settings.json");
+    path
+}
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-apple-darwin, aarch64-apple-darwin
+fn load_config() -> Config {
+    let path = config_path();
+    if path.exists() {
+        if let Ok(data) = fs::read_to_string(&path) {
+            serde_json::from_str(&data).unwrap_or_default()
+        } else {
+            Config::default()
+        }
+    } else {
+        Config::default()
+    }
+}
 
-      - name: Cache Cargo registry + build
-        uses: Swatinem/rust-cache@v2
+fn save_config(config: &Config) {
+    let path = config_path();
+    if let Ok(json) = serde_json::to_string_pretty(config) {
+        fs::write(path, json).ok();
+    }
+}
 
-      - name: Build Intel slice
-        env:
-          MACOSX_DEPLOYMENT_TARGET: "11.0"
-        run: |
-          cargo build --release --target x86_64-apple-darwin --verbose
+// ---------- Network ----------
+fn check_health(token: &str) -> bool {
+    ureq::get("https://novacibes-python-running-api.hf.space/health")
+        .set("Authorization", &format!("Bearer {}", token))
+        .timeout(std::time::Duration::from_secs(3))
+        .call()
+        .is_ok()
+}
 
-      - name: Build Apple Silicon slice
-        env:
-          MACOSX_DEPLOYMENT_TARGET: "11.0"
-        run: |
-          cargo build --release --target aarch64-apple-darwin --verbose
+// ---------- Main UI ----------
+fn main() {
+    let app = app::App::default();
+    let mut wind = Window::default()
+        .with_size(800, 600)
+        .with_label("NovaCibes Python Runner");
+    wind.make_resizable(true);
 
-      - name: Prepare universal binary
-        run: |
-          set -euo pipefail
+    // Shared state
+    let config: Arc<Mutex<Config>> = Arc::new(Mutex::new(load_config()));
+    let connected = Arc::new(AtomicBool::new(false));
 
-          mkdir -p dist
+    // --- Menu bar ---
+    let mut menu_bar = menu::MenuBar::new(0, 0, 800, 30, "");
+    menu_bar.add(
+        "&File/&Settings\t",
+        Shortcut::None,
+        MenuFlag::Normal,
+        {
+            let config = config.clone();
+            let connected = connected.clone();
+            move |_| {
+                let token = dialog::password(400, 200, "Enter your Hugging Face token", "")
+                    .unwrap_or_default();
+                if token.is_empty() {
+                    return;
+                }
+                {
+                    let mut cfg = config.lock().unwrap();
+                    cfg.token = token.clone();
+                    save_config(&cfg);
+                }
+                let token = token.clone();
+                let connected = connected.clone();
+                thread::spawn(move || {
+                    let ok = check_health(&token);
+                    connected.store(ok, Ordering::Relaxed);
+                    app::awake();
+                });
+            }
+        },
+    );
+    menu_bar.add(
+        "&Help/&About",
+        Shortcut::None,
+        MenuFlag::Normal,
+        |_| {
+            dialog::message_default("NovaCibes Python Runner v0.1\nThin client for remote Python execution.");
+        },
+    );
 
-          INTEL_BIN="$(find target/x86_64-apple-darwin/release -maxdepth 1 -type f -perm -111 \
-            ! -name '*.d' ! -name '*.rlib' ! -name '*.rmeta' | head -n 1)"
-          ARM_BIN="$(find target/aarch64-apple-darwin/release -maxdepth 1 -type f -perm -111 \
-            ! -name '*.d' ! -name '*.rlib' ! -name '*.rmeta' | head -n 1)"
+    // --- Status bar ---
+    let mut status_frame = Frame::default()
+        .with_size(780, 30)
+        .with_pos(10, 40)
+        .with_label("Status: checking...");
+    status_frame.set_color(Color::from_rgb(240, 240, 240));
+    status_frame.set_frame(FrameType::FlatBox);
 
-          if [ -z "$INTEL_BIN" ]; then
-            echo "Intel binary not found"
-            ls -la target/x86_64-apple-darwin/release || true
-            exit 1
-          fi
+    // Run button (disabled initially)
+    let mut run_btn = fltk::button::Button::new(10, 80, 80, 30, "▶ Run");
+    run_btn.deactivate();
 
-          if [ -z "$ARM_BIN" ]; then
-            echo "Apple Silicon binary not found"
-            ls -la target/aarch64-apple-darwin/release || true
-            exit 1
-          fi
+    wind.end();
+    wind.show();
 
-          OUT_BIN="dist/novacibes-python-runner"
-          lipo -create "$INTEL_BIN" "$ARM_BIN" -output "$OUT_BIN"
-          chmod +x "$OUT_BIN"
-          file "$OUT_BIN"
+    // --- Initial token / health check ---
+    let initial_token = {
+        let cfg = config.lock().unwrap().clone();
+        cfg.token
+    };
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: novacibes-macos-universal
-          path: dist/
+    if initial_token.is_empty() {
+        let token = dialog::password(400, 200, "Welcome!\nEnter your Hugging Face token", "")
+            .unwrap_or_default();
+        if token.is_empty() {
+            dialog::alert(400, 200, "No token provided. You can add it later via File > Settings.");
+        } else {
+            let mut cfg = config.lock().unwrap();
+            cfg.token = token.clone();
+            save_config(&cfg);
+        }
+    }
 
-  release:
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: build
-    runs-on: macos-latest
+    let token_for_check = {
+        config.lock().unwrap().token.clone()
+    };
+    if !token_for_check.is_empty() {
+        let connected = connected.clone();
+        thread::spawn(move || {
+            let ok = check_health(&token_for_check);
+            connected.store(ok, Ordering::Relaxed);
+            app::awake();
+        });
+    } else {
+        connected.store(false, Ordering::Relaxed);
+        status_frame.set_label("Status: no token set. Go to File > Settings.");
+    }
 
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          path: release-artifacts
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: release-artifacts/**/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    // Main loop
+    while app.wait() {
+        let is_connected = connected.load(Ordering::Relaxed);
+        if is_connected {
+            status_frame.set_label("Status: connected to NovaCibes API");
+            status_frame.set_color(Color::from_rgb(200, 255, 200));
+            run_btn.activate();
+        } else if !config.lock().unwrap().token.is_empty() {
+            status_frame.set_label("Status: no internet or invalid token");
+            status_frame.set_color(Color::from_rgb(255, 200, 200));
+            run_btn.deactivate();
+        }
+        wind.redraw();
+    }
+}
