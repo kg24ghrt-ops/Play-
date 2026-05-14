@@ -16,10 +16,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-apple-darwin, aarch64-apple-darwin
+      - name: Install Rust
+        run: |
+          rustup set profile minimal
+          rustup toolchain install stable --component rustfmt
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Add Rust targets
+        run: |
+          rustup target add x86_64-apple-darwin
+          rustup target add aarch64-apple-darwin
 
       - name: Cache Cargo registry + build
         uses: Swatinem/rust-cache@v2
@@ -42,25 +50,26 @@ jobs:
 
           mkdir -p dist
 
-          INTEL_BIN="target/x86_64-apple-darwin/release/novacibes-python-runner"
-          ARM_BIN="target/aarch64-apple-darwin/release/novacibes-python-runner"
-          OUT_BIN="dist/novacibes-python-runner"
+          INTEL_BIN="$(find target/x86_64-apple-darwin/release -maxdepth 1 -type f -perm -111 \
+            ! -name '*.d' ! -name '*.rlib' ! -name '*.rmeta' | head -n 1)"
+          ARM_BIN="$(find target/aarch64-apple-darwin/release -maxdepth 1 -type f -perm -111 \
+            ! -name '*.d' ! -name '*.rlib' ! -name '*.rmeta' | head -n 1)"
 
-          if [ ! -f "$INTEL_BIN" ]; then
+          if [ -z "$INTEL_BIN" ]; then
             echo "Intel binary not found"
-            ls -R target/x86_64-apple-darwin/release || true
+            ls -la target/x86_64-apple-darwin/release || true
             exit 1
           fi
 
-          if [ ! -f "$ARM_BIN" ]; then
+          if [ -z "$ARM_BIN" ]; then
             echo "Apple Silicon binary not found"
-            ls -R target/aarch64-apple-darwin/release || true
+            ls -la target/aarch64-apple-darwin/release || true
             exit 1
           fi
 
+          OUT_BIN="dist/novacibes-python-runner"
           lipo -create "$INTEL_BIN" "$ARM_BIN" -output "$OUT_BIN"
           chmod +x "$OUT_BIN"
-
           file "$OUT_BIN"
 
       - name: Upload artifact
