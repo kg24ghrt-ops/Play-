@@ -2,7 +2,7 @@ use fltk::{
     app, dialog,
     enums::{Color, FrameType, Shortcut},
     frame::Frame,
-    menu,
+    menu::{self, MenuFlag},
     prelude::*,
     window::Window,
 };
@@ -78,14 +78,12 @@ fn main() {
     let config: Arc<Mutex<Config>> = Arc::new(Mutex::new(load_config()));
     let connected = Arc::new(AtomicBool::new(false));
 
-    // --- Menu bar ---
-    let mut menu_bar = menu::MenuBar::default()
-        .with_type(menu::MenuBarType::Normal)   // <-- fixed
-        .with_pos(0, 0);
+    // --- Menu bar (no MenuBarType needed) ---
+    let mut menu_bar = menu::MenuBar::new(0, 0, 800, 30, "");
     menu_bar.add(
         "&File/&Settings\t",
         Shortcut::None,
-        menu::MenuFlag::Normal,
+        MenuFlag::Normal,
         {
             let config = config.clone();
             let connected = connected.clone();
@@ -113,16 +111,15 @@ fn main() {
     menu_bar.add(
         "&Help/&About",
         Shortcut::None,
-        menu::MenuFlag::Normal,
+        MenuFlag::Normal,
         |_| {
             dialog::message_default("NovaCibes Python Runner v0.1\nThin client for remote Python execution.");
         },
     );
-    menu_bar.end();
 
     // --- Status bar ---
     let mut status_frame = Frame::default()
-        .with_size(800 - 20, 30)
+        .with_size(780, 30)
         .with_pos(10, 40)
         .with_label("Status: checking...");
     status_frame.set_color(Color::from_rgb(240, 240, 240));
