@@ -23,13 +23,29 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build --release
+        run: cargo build --release --verbose
 
       - name: Prepare artifact
         run: |
           mkdir -p dist
-          cp target/release/novacibes-python-runner dist/
-          chmod +x dist/novacibes-python-runner
+          set -euo pipefail
+          mkdir -p dist
+
+          BIN_PATH="$(find target/release -maxdepth 1 -type f -perm -111 \
+            ! -name '*.d' \
+            ! -name '*.rlib' \
+            ! -name '*.rmeta' \
+            | head -n 1)"
+
+          if [ -z "$BIN_PATH" ]; then
+            echo "No release binary found in target/release"
+            ls -la target/release
+            exit 1
+          fi
+
+          BIN_NAME="$(basename "$BIN_PATH")"
+          cp "$BIN_PATH" "dist/$BIN_NAME"
+          chmod +x "dist/$BIN_NAME"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
