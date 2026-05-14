@@ -1,6 +1,6 @@
 use fltk::{
     app, dialog,
-    enums::{Color, Font, FrameType},
+    enums::{Color, FrameType, MenuBarType, Shortcut},
     frame::Frame,
     menu,
     prelude::*,
@@ -25,9 +25,7 @@ struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self {
-            token: String::new(),
-        }
+        Self { token: String::new() }
     }
 }
 
@@ -76,13 +74,13 @@ fn main() {
         .with_label("NovaCibes Python Runner");
     wind.make_resizable(true);
 
-    // Shared state between threads and the UI
+    // Shared state
     let config: Arc<Mutex<Config>> = Arc::new(Mutex::new(load_config()));
     let connected = Arc::new(AtomicBool::new(false));
 
     // --- Menu bar ---
     let mut menu_bar = menu::MenuBar::default()
-        .with_type(menu::MenuBarType::Normal)
+        .with_type(MenuBarType::Normal)
         .with_pos(0, 0);
     menu_bar.add(
         "&File/&Settings\t",
@@ -91,26 +89,23 @@ fn main() {
         {
             let config = config.clone();
             let connected = connected.clone();
-            let mut wind = wind.clone();
             move |_| {
-                let token = dialog::password(400, 200, "Enter your Hugging Face token")
+                // password now requires a default value (empty string)
+                let token = dialog::password(400, 200, "Enter your Hugging Face token", "")
                     .unwrap_or_default();
                 if token.is_empty() {
                     return;
                 }
-                // Save new token
                 {
                     let mut cfg = config.lock().unwrap();
                     cfg.token = token.clone();
                     save_config(&cfg);
                 }
-                // Check health with new token in background
-                let connected = connected.clone();
                 let token = token.clone();
+                let connected = connected.clone();
                 thread::spawn(move || {
                     let ok = check_health(&token);
                     connected.store(ok, Ordering::Relaxed);
-                    // Use app::awake to update the UI from the main thread
                     app::awake();
                 });
             }
@@ -126,7 +121,7 @@ fn main() {
     );
     menu_bar.end();
 
-    // --- Main layout (placeholder) ---
+    // --- Status bar ---
     let mut status_frame = Frame::default()
         .with_size(800 - 20, 30)
         .with_pos(10, 40)
@@ -134,22 +129,21 @@ fn main() {
     status_frame.set_color(Color::from_rgb(240, 240, 240));
     status_frame.set_frame(FrameType::FlatBox);
 
-    // "Run" button (disabled for now)
+    // Run button (disabled initially)
     let mut run_btn = fltk::button::Button::new(10, 80, 80, 30, "▶ Run");
-    run_btn.deactivate(); // will only enable when connected
+    run_btn.deactivate();
 
     wind.end();
     wind.show();
 
-    // --- Initialisation: prompt for token if missing, then health check ---
+    // --- Initial token / health check ---
     let initial_token = {
         let cfg = config.lock().unwrap().clone();
         cfg.token
     };
 
     if initial_token.is_empty() {
-        // First run: show dialog
-        let token = dialog::password(400, 200, "Welcome!\nEnter your Hugging Face token")
+        let token = dialog::password(400, 200, "Welcome!\nEnter your Hugging Face token", "")
             .unwrap_or_default();
         if token.is_empty() {
             dialog::alert(400, 200, "No token provided. You can add it later via File > Settings.");
@@ -160,7 +154,6 @@ fn main() {
         }
     }
 
-    // After token is set (or not), check health
     let token_for_check = {
         config.lock().unwrap().token.clone()
     };
@@ -169,16 +162,15 @@ fn main() {
         thread::spawn(move || {
             let ok = check_health(&token_for_check);
             connected.store(ok, Ordering::Relaxed);
-            app::awake(); // notify main thread
+            app::awake();
         });
     } else {
         connected.store(false, Ordering::Relaxed);
         status_frame.set_label("Status: no token set. Go to File > Settings.");
     }
 
-    // --- Main event loop ---
+    // Main loop
     while app.wait() {
-        // Update UI based on health check result
         let is_connected = connected.load(Ordering::Relaxed);
         if is_connected {
             status_frame.set_label("Status: connected to NovaCibes API");
@@ -189,8 +181,6 @@ fn main() {
             status_frame.set_color(Color::from_rgb(255, 200, 200));
             run_btn.deactivate();
         }
-        // Note: app::awake() will cause this loop to run once, so status updates immediately
-        // We redraw the window
         wind.redraw();
     }
 }
