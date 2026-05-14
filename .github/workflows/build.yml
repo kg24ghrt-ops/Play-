@@ -2,96 +2,133 @@ name: Build NovaCibes Python Runner (Universal macOS)
 
 on:
   push:
-    branches:
-      - main
-      - master
+    branches: [ main, master ]
   pull_request:
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: macos-latest
-
+    strategy:
+      matrix:
+        target: [x86_64-apple-darwin, aarch64-apple-darwin]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Rust
-        run: |
-          rustup set profile minimal
-          rustup toolchain install stable --component rustfmt
-          rustup default stable
-          rustc --version
-          cargo --version
-
-      - name: Add Rust targets
-        run: |
-          rustup target add x86_64-apple-darwin
-          rustup target add aarch64-apple-darwin
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Cache Cargo registry + build
         uses: Swatinem/rust-cache@v2
 
-      - name: Build Intel slice
+      - name: Build binary for ${{ matrix.target }}
         env:
           MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle
+
+      - name: Create .app bundle for ${{ matrix.target }}
+        run: cargo bundle --release --target ${{ matrix.target }}
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Create .dmg installer for ${{ matrix.target }}
         run: |
-          cargo build --release --target x86_64-apple-darwin --verbose
+          create-dmg \
+            --volname "NovaCibes Editor" \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "NovaCibes Editor.app" 200 190 \
+            --hide-extension "NovaCibes Editor.app" \
+            --app-drop-link 400 190 \
+            "NovaCibes-Editor-${{ matrix.target }}.dmg" \
+            "target/${{ matrix.target }}/release/bundle/osx/NovaCibes Editor.app"
 
-      - name: Build Apple Silicon slice
-        env:
-          MACOSX_DEPLOYMENT_TARGET: "11.0"
-        run: |
-          cargo build --release --target aarch64-apple-darwin --verbose
-
-      - name: Prepare universal binary
-        run: |
-          set -euo pipefail
-
-          mkdir -p dist
-
-          INTEL_BIN="$(find target/x86_64-apple-darwin/release -maxdepth 1 -type f -perm -111 \
-            ! -name '*.d' ! -name '*.rlib' ! -name '*.rmeta' | head -n 1)"
-          ARM_BIN="$(find target/aarch64-apple-darwin/release -maxdepth 1 -type f -perm -111 \
-            ! -name '*.d' ! -name '*.rlib' ! -name '*.rmeta' | head -n 1)"
-
-          if [ -z "$INTEL_BIN" ]; then
-            echo "Intel binary not found"
-            ls -la target/x86_64-apple-darwin/release || true
-            exit 1
-          fi
-
-          if [ -z "$ARM_BIN" ]; then
-            echo "Apple Silicon binary not found"
-            ls -la target/aarch64-apple-darwin/release || true
-            exit 1
-          fi
-
-          OUT_BIN="dist/novacibes-python-runner"
-          lipo -create "$INTEL_BIN" "$ARM_BIN" -output "$OUT_BIN"
-          chmod +x "$OUT_BIN"
-          file "$OUT_BIN"
-
-      - name: Upload artifact
+      - name: Upload DMG for ${{ matrix.target }}
         uses: actions/upload-artifact@v4
         with:
-          name: novacibes-macos-universal
-          path: dist/
+          name: novacibes-editor-${{ matrix.target }}
+          path: NovaCibes-Editor-${{ matrix.target }}.dmg
+
+  create-universal-dmg:
+    runs-on: macos-latest
+    needs: build
+    steps:
+      - name: Download Intel DMG
+        uses: actions/download-artifact@v4
+        with:
+          name: novacibes-editor-x86_64-apple-darwin
+          path: intel
+
+      - name: Download ARM DMG
+        uses: actions/download-artifact@v4
+        with:
+          name: novacibes-editor-aarch64-apple-darwin
+          path: arm
+
+      - name: Extract .app bundles from DMGs
+        run: |
+          mkdir -p intel_mount arm_mount universal_bundle
+          # Mount Intel DMG and copy .app
+          hdiutil attach intel/NovaCibes-Editor-x86_64-apple-darwin.dmg -mountpoint intel_mount
+          cp -R intel_mount/*.app universal_bundle/
+          hdiutil detach intel_mount
+          # Mount ARM DMG and copy .app
+          hdiutil attach arm/NovaCibes-Editor-aarch64-apple-darwin.dmg -mountpoint arm_mount
+          cp -R arm_mount/*.app universal_bundle/
+          hdiutil detach arm_mount
+
+      - name: Create universal binary from the two .app bundles
+        run: |
+          INTEL_BIN="universal_bundle/NovaCibes Editor.app/Contents/MacOS/NovaCibes Editor"
+          ARM_BIN="universal_bundle/NovaCibes Editor 2.app/Contents/MacOS/NovaCibes Editor"
+          # The two .app bundles have slightly different names; find the correct one
+          INTEL_BIN=$(find universal_bundle -name "*.app" -path "*x86_64*" -or -name "*.app" | head -1)/Contents/MacOS/*
+          ARM_BIN=$(find universal_bundle -name "*.app" -path "*aarch64*" -or -name "*.app" | head -1)/Contents/MacOS/*
+          # Simplify: just create universal binary from the two executables
+          mkdir -p universal_bundle/NovaCibes\ Editor.app/Contents/MacOS
+          lipo -create "$INTEL_BIN" "$ARM_BIN" -output universal_bundle/NovaCibes\ Editor.app/Contents/MacOS/NovaCibes\ Editor
+          chmod +x universal_bundle/NovaCibes\ Editor.app/Contents/MacOS/NovaCibes\ Editor
+
+      - name: Package universal .app into final DMG
+        run: |
+          brew install create-dmg
+          create-dmg \
+            --volname "NovaCibes Editor" \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "NovaCibes Editor.app" 200 190 \
+            --hide-extension "NovaCibes Editor.app" \
+            --app-drop-link 400 190 \
+            "NovaCibes-Editor-universal.dmg" \
+            "universal_bundle/NovaCibes Editor.app"
+
+      - name: Upload universal DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: novacibes-editor-universal
+          path: NovaCibes-Editor-universal.dmg
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
-    runs-on: macos-latest
-
+    needs: create-universal-dmg
+    runs-on: ubuntu-latest
     steps:
-      - name: Download artifact
+      - name: Download universal DMG
         uses: actions/download-artifact@v4
         with:
+          name: novacibes-editor-universal
           path: release-artifacts
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release-artifacts/**/*
+          files: release-artifacts/NovaCibes-Editor-universal.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
