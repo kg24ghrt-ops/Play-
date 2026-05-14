@@ -1,68 +1,72 @@
-name: Build NovaCibes Python Runner (macOS 11 Intel)
+name: Build NovaCibes Python Runner (macOS)
 
 on:
   push:
-    branches: [main, master]
+    branches:
+      - main
+      - master
   pull_request:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-13
+    runs-on: macos-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Rust
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Cargo
+      - name: Cache Cargo registry + build
         uses: Swatinem/rust-cache@v2
 
-      - name: Build (macOS 11 Intel compatible)
-        env:
-          MACOSX_DEPLOYMENT_TARGET: "11.0"
-        run: |
-          cargo build --release --target x86_64-apple-darwin --verbose
+      - name: Build release binary
+        run: MACOSX_DEPLOYMENT_TARGET=11.0 cargo build --release --target x86_64-apple-darwin --verbose
 
       - name: Prepare artifact
         run: |
-          set -e
-
+          mkdir -p dist
+          set -euo pipefail
           mkdir -p dist
 
-          BIN="target/x86_64-apple-darwin/release/novacibes-python-runner"
+          BIN_PATH="$(find target/release -maxdepth 1 -type f -perm -111 \
+            ! -name '*.d' \
+            ! -name '*.rlib' \
+            ! -name '*.rmeta' \
+            | head -n 1)"
 
-          if [ ! -f "$BIN" ]; then
-            echo "Build failed: binary not found"
-            ls -R target
+          if [ -z "$BIN_PATH" ]; then
+            echo "No release binary found in target/release"
+            ls -la target/release
             exit 1
           fi
 
-          cp "$BIN" dist/
-          chmod +x dist/novacibes-python-runner
+          BIN_NAME="$(basename "$BIN_PATH")"
+          cp "$BIN_PATH" "dist/$BIN_NAME"
+          chmod +x "dist/$BIN_NAME"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-intel-macos11-build
+          name: novacibes-macos-build
           path: dist/
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
-    runs-on: macos-13
+    runs-on: macos-latest
 
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          path: release
+          path: release-artifacts
 
-      - name: Publish Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release/**/*
+          files: release-artifacts/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
