@@ -1,4 +1,4 @@
-name: Build NovaCibes Python Runner (macOS)
+name: Build NovaCibes Python Runner (Universal macOS)
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-13
 
     steps:
       - name: Checkout repository
@@ -18,45 +18,61 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin, aarch64-apple-darwin
 
       - name: Cache Cargo registry + build
         uses: Swatinem/rust-cache@v2
 
-      - name: Build release binary
-        run: MACOSX_DEPLOYMENT_TARGET=11.0 cargo build --release --target x86_64-apple-darwin --verbose
-
-      - name: Prepare artifact
+      - name: Build Intel slice
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
         run: |
-          mkdir -p dist
+          cargo build --release --target x86_64-apple-darwin --verbose
+
+      - name: Build Apple Silicon slice
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          cargo build --release --target aarch64-apple-darwin --verbose
+
+      - name: Prepare universal binary
+        run: |
           set -euo pipefail
+
           mkdir -p dist
 
-          BIN_PATH="$(find target/release -maxdepth 1 -type f -perm -111 \
-            ! -name '*.d' \
-            ! -name '*.rlib' \
-            ! -name '*.rmeta' \
-            | head -n 1)"
+          INTEL_BIN="target/x86_64-apple-darwin/release/novacibes-python-runner"
+          ARM_BIN="target/aarch64-apple-darwin/release/novacibes-python-runner"
+          OUT_BIN="dist/novacibes-python-runner"
 
-          if [ -z "$BIN_PATH" ]; then
-            echo "No release binary found in target/release"
-            ls -la target/release
+          if [ ! -f "$INTEL_BIN" ]; then
+            echo "Intel binary not found"
+            ls -R target/x86_64-apple-darwin/release || true
             exit 1
           fi
 
-          BIN_NAME="$(basename "$BIN_PATH")"
-          cp "$BIN_PATH" "dist/$BIN_NAME"
-          chmod +x "dist/$BIN_NAME"
+          if [ ! -f "$ARM_BIN" ]; then
+            echo "Apple Silicon binary not found"
+            ls -R target/aarch64-apple-darwin/release || true
+            exit 1
+          fi
+
+          lipo -create "$INTEL_BIN" "$ARM_BIN" -output "$OUT_BIN"
+          chmod +x "$OUT_BIN"
+
+          file "$OUT_BIN"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: novacibes-macos-build
+          name: novacibes-macos-universal
           path: dist/
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
-    runs-on: macos-latest
+    runs-on: macos-13
 
     steps:
       - name: Download artifact
