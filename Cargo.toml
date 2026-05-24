@@ -15,8 +15,6 @@ formats = ["dmg", "app"]
 [package.metadata.bundle]
 name = "NovaCibes Editor"
 identifier = "com.novacibes.editor"
-icon = ["assets/icon.icns"]
-version = "0.1.0"
 
 [dependencies]
 eframe = "0.34.2"
