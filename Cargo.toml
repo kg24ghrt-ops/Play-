@@ -12,6 +12,12 @@ version = "0.1.0"
 before_packaging_command = "cargo build --release"
 formats = ["dmg", "app"]
 
+[package.metadata.bundle]
+name = "NovaCibes Editor"
+identifier = "com.novacibes.editor"
+icon = ["assets/icon.icns"]
+version = "0.1.0"
+
 [dependencies]
 eframe = "0.34.2"
 egui = "0.34.2"
