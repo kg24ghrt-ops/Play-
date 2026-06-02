@@ -17,6 +17,27 @@ rfd = "0.17.2"
 directories = "6.0.0"
 once_cell = "1.21.3"
 
+[package.metadata.packager]
+product-name = "NovaCibes Editor"
+identifier = "com.novacibes.editor"
+version = "0.1.0"
+description = "A native macOS code editor that runs Python via a remote API."
+
+[package.metadata.packager.macos]
+minimum-system-version = "11.0"
+formats = ["app", "dmg"]
+
+[package.metadata.bundle]
+name = "NovaCibes Editor"
+identifier = "com.novacibes.editor"
+version = "0.1.0"
+copyright = "Copyright © 2024 NovaCibes"
+category = "Developer Tool"
+short_description = "A native macOS code editor for Python."
+long_description = """
+A native macOS code editor that runs Python via a remote API.
+"""
+
 [profile.release]
 opt-level = 2
 strip = true
