@@ -27,6 +27,18 @@ description = "A native macOS code editor that runs Python via a remote API."
 minimum-system-version = "11.0"
 formats = ["app", "dmg"]
 
+[package.metadata.bundle]
+name = "NovaCibes Editor"
+identifier = "com.novacibes.editor"
+icon = ["assets/icon.icns"]
+version = "0.1.0"
+copyright = "Copyright © 2024 NovaCibes"
+category = "Developer Tool"
+short_description = "A native macOS code editor for Python."
+long_description = """
+A native macOS code editor that runs Python via a remote API.
+"""
+
 [profile.release]
 opt-level = 2
 strip = true

@@ -68,8 +68,6 @@ fn python_syntax() -> Syntax {
 }
 
 fn monokai_theme() -> ColorTheme {
-    // The Monokai theme is embedded directly here to ensure the application
-    // remains lightweight and standalone without external asset dependencies.
     ColorTheme {
         name: "Monokai",
         dark: true,
