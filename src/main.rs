@@ -234,23 +234,17 @@ impl NovaCibesEditor {
     }
 
     fn close_active_tab(&mut self) {
-        if self.open_files.len() <= 1 {
+        self.open_files.remove(self.active_tab);
+        if self.open_files.is_empty() {
             self.open_files = vec![EditorTab::new_empty()];
             self.active_tab = 0;
-            return;
-        }
-        self.open_files.remove(self.active_tab);
-        if self.active_tab >= self.open_files.len() {
+        } else if self.active_tab >= self.open_files.len() {
             self.active_tab = self.open_files.len() - 1;
         }
     }
 }
 
 impl eframe::App for NovaCibesEditor {
-    fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Implementation provided in update for panel support
-    }
-
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.set_visuals(egui::Visuals::dark());
 
@@ -375,6 +369,10 @@ impl eframe::App for NovaCibesEditor {
             }
         }
         if self.running { ctx.request_repaint(); }
+    }
+
+    fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Implementation in update
     }
 }
 

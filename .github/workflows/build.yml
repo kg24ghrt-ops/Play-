@@ -74,35 +74,28 @@ jobs:
 
       - name: Extract .app bundles from DMGs
         run: |
-          mkdir -p intel_mount arm_mount universal_bundle
+          mkdir -p intel_app arm_app universal_bundle
           # Mount Intel DMG and copy .app
           hdiutil attach intel/NovaCibes-Editor-x86_64-apple-darwin.dmg -mountpoint intel_mount
-          cp -R intel_mount/*.app universal_bundle/
+          cp -R intel_mount/*.app intel_app/
           hdiutil detach intel_mount
           # Mount ARM DMG and copy .app
           hdiutil attach arm/NovaCibes-Editor-aarch64-apple-darwin.dmg -mountpoint arm_mount
-          cp -R arm_mount/*.app universal_bundle/
+          cp -R arm_mount/*.app arm_app/
           hdiutil detach arm_mount
 
       - name: Create universal binary from the two .app bundles
         run: |
-          # Find the binaries inside the .app bundles
-          INTEL_BIN=$(find universal_bundle -maxdepth 2 -name "*.app" | grep "x86_64" | head -1)/Contents/MacOS/novacibes-editor
-          ARM_BIN=$(find universal_bundle -maxdepth 2 -name "*.app" | grep "aarch64" | head -1)/Contents/MacOS/novacibes-editor
-
-          # If grep fails (names might not contain arch), fallback to listing
-          if [ -z "$INTEL_BIN" ] || [ -z "$ARM_BIN" ]; then
-            BINS=($(find universal_bundle -name "novacibes-editor" -path "*/Contents/MacOS/*"))
-            INTEL_BIN="${BINS[0]}"
-            ARM_BIN="${BINS[1]}"
-          fi
+          INTEL_BIN=$(find intel_app -name "novacibes-editor" -path "*/Contents/MacOS/*")
+          ARM_BIN=$(find arm_app -name "novacibes-editor" -path "*/Contents/MacOS/*")
 
           echo "Intel bin: $INTEL_BIN"
           echo "ARM bin: $ARM_BIN"
 
           # Create final universal bundle structure
           mkdir -p "universal_bundle/NovaCibes Editor.app/Contents/MacOS"
-          cp -R "$(find universal_bundle -name "*.app" | head -1)/Contents/Info.plist" "universal_bundle/NovaCibes Editor.app/Contents/"
+          # Copy Info.plist from one of them
+          cp "$(find intel_app -name "Info.plist" | head -1)" "universal_bundle/NovaCibes Editor.app/Contents/"
 
           lipo -create "$INTEL_BIN" "$ARM_BIN" -output "universal_bundle/NovaCibes Editor.app/Contents/MacOS/NovaCibes Editor"
           chmod +x "universal_bundle/NovaCibes Editor.app/Contents/MacOS/NovaCibes Editor"
