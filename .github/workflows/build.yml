@@ -86,15 +86,26 @@ jobs:
 
       - name: Create universal binary from the two .app bundles
         run: |
-          INTEL_BIN="universal_bundle/NovaCibes Editor.app/Contents/MacOS/NovaCibes Editor"
-          ARM_BIN="universal_bundle/NovaCibes Editor 2.app/Contents/MacOS/NovaCibes Editor"
-          # The two .app bundles have slightly different names; find the correct one
-          INTEL_BIN=$(find universal_bundle -name "*.app" -path "*x86_64*" -or -name "*.app" | head -1)/Contents/MacOS/*
-          ARM_BIN=$(find universal_bundle -name "*.app" -path "*aarch64*" -or -name "*.app" | head -1)/Contents/MacOS/*
-          # Simplify: just create universal binary from the two executables
-          mkdir -p universal_bundle/NovaCibes\ Editor.app/Contents/MacOS
-          lipo -create "$INTEL_BIN" "$ARM_BIN" -output universal_bundle/NovaCibes\ Editor.app/Contents/MacOS/NovaCibes\ Editor
-          chmod +x universal_bundle/NovaCibes\ Editor.app/Contents/MacOS/NovaCibes\ Editor
+          # Find the binaries inside the .app bundles
+          INTEL_BIN=$(find universal_bundle -maxdepth 2 -name "*.app" | grep "x86_64" | head -1)/Contents/MacOS/novacibes-editor
+          ARM_BIN=$(find universal_bundle -maxdepth 2 -name "*.app" | grep "aarch64" | head -1)/Contents/MacOS/novacibes-editor
+
+          # If grep fails (names might not contain arch), fallback to listing
+          if [ -z "$INTEL_BIN" ] || [ -z "$ARM_BIN" ]; then
+            BINS=($(find universal_bundle -name "novacibes-editor" -path "*/Contents/MacOS/*"))
+            INTEL_BIN="${BINS[0]}"
+            ARM_BIN="${BINS[1]}"
+          fi
+
+          echo "Intel bin: $INTEL_BIN"
+          echo "ARM bin: $ARM_BIN"
+
+          # Create final universal bundle structure
+          mkdir -p "universal_bundle/NovaCibes Editor.app/Contents/MacOS"
+          cp -R "$(find universal_bundle -name "*.app" | head -1)/Contents/Info.plist" "universal_bundle/NovaCibes Editor.app/Contents/"
+
+          lipo -create "$INTEL_BIN" "$ARM_BIN" -output "universal_bundle/NovaCibes Editor.app/Contents/MacOS/NovaCibes Editor"
+          chmod +x "universal_bundle/NovaCibes Editor.app/Contents/MacOS/NovaCibes Editor"
 
       - name: Package universal .app into final DMG
         run: |
