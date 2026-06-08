@@ -5,20 +5,43 @@ edition = "2021"
 description = "A native macOS code editor that runs Python via a remote API."
 
 [dependencies]
-eframe = "0.34.2"
-egui = "0.34.2"
-egui_code_editor = "0.2.12"
+eframe = "0.34"
+egui = "0.34"
+egui_code_editor = "0.2.27"
 syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
-reqwest = { version = "0.12.24", features = ["json"] }
-tokio = { version = "1.45.1", features = ["full"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
-rfd = "0.17.2"
-directories = "6.0.0"
-once_cell = "1.21.3"
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1.45", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rfd = "0.17"
+directories = "6.0"
+once_cell = "1.21"
 
 [profile.release]
 opt-level = 2
 strip = true
 lto = true
 codegen-units = 1
+
+[package.metadata.packager]
+name = "NovaCibes Editor"
+identifier = "com.novacibes.editor"
+version = "0.1.0"
+authors = ["NovaCibes"]
+description = "A native macOS code editor that runs Python via a remote API."
+category = "DeveloperTool"
+copyright = "Copyright 2025 NovaCibes"
+out-dir = "./dist"
+
+[package.metadata.packager.macos]
+minimum-system-version = "11.0"
+entitlements = "assets/entitlements.plist"
+
+[package.metadata.bundle]
+name = "NovaCibes Editor"
+identifier = "com.novacibes.editor"
+version = "0.1.0"
+resources = []
+copyright = "Copyright 2025 NovaCibes"
+category = "DeveloperTool"
+short_description = "A native macOS code editor that runs Python via a remote API."

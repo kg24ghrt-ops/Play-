@@ -40,15 +40,17 @@ jobs:
 
       - name: Create .dmg installer for ${{ matrix.target }}
         run: |
+          APP_PATH=$(find dist/${{ matrix.target }}/release/bundle/osx -name "*.app" | head -1)
+          APP_NAME=$(basename "$APP_PATH")
           create-dmg \
             --volname "NovaCibes Editor" \
             --window-size 600 400 \
             --icon-size 100 \
-            --icon "NovaCibes Editor.app" 200 190 \
-            --hide-extension "NovaCibes Editor.app" \
+            --icon "$APP_NAME" 200 190 \
+            --hide-extension "$APP_NAME" \
             --app-drop-link 400 190 \
             "NovaCibes-Editor-${{ matrix.target }}.dmg" \
-            "target/${{ matrix.target }}/release/bundle/osx/NovaCibes Editor.app"
+            "$APP_PATH"
 
       - name: Upload DMG for ${{ matrix.target }}
         uses: actions/upload-artifact@v4
@@ -99,15 +101,17 @@ jobs:
       - name: Package universal .app into final DMG
         run: |
           brew install create-dmg
+          APP_PATH=$(find universal_bundle -name "*.app" | head -1)
+          APP_NAME=$(basename "$APP_PATH")
           create-dmg \
             --volname "NovaCibes Editor" \
             --window-size 600 400 \
             --icon-size 100 \
-            --icon "NovaCibes Editor.app" 200 190 \
-            --hide-extension "NovaCibes Editor.app" \
+            --icon "$APP_NAME" 200 190 \
+            --hide-extension "$APP_NAME" \
             --app-drop-link 400 190 \
             "NovaCibes-Editor-universal.dmg" \
-            "universal_bundle/NovaCibes Editor.app"
+            "$APP_PATH"
 
       - name: Upload universal DMG
         uses: actions/upload-artifact@v4
