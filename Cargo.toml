@@ -36,3 +36,12 @@ out-dir = "./dist"
 [package.metadata.packager.macos]
 minimum-system-version = "11.0"
 entitlements = "assets/entitlements.plist"
+
+[package.metadata.bundle]
+name = "NovaCibes Editor"
+identifier = "com.novacibes.editor"
+version = "0.1.0"
+resources = []
+copyright = "Copyright 2025 NovaCibes"
+category = "DeveloperTool"
+short_description = "A native macOS code editor that runs Python via a remote API."

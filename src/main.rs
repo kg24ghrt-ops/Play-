@@ -199,11 +199,16 @@ impl NovaCibesEditor {
 
     fn save_active(&mut self) {
         if self.active_tab >= self.open_files.len() { return; }
-        let tab = &mut self.open_files[self.active_tab];
-        if let Some(path) = &tab.path {
-            if std::fs::write(path, &tab.code).is_ok() {
+        let (path, code, title) = {
+            let tab = &self.open_files[self.active_tab];
+            (tab.path.clone(), tab.code.clone(), tab.title())
+        };
+
+        if let Some(p) = path {
+            if std::fs::write(&p, &code).is_ok() {
+                let tab = &mut self.open_files[self.active_tab];
                 tab.modified = false;
-                self.status_message = format!("Saved {}", tab.title());
+                self.status_message = format!("Saved {}", title);
             } else {
                 self.status_message = "Error saving".into();
             }
@@ -243,7 +248,8 @@ impl NovaCibesEditor {
 }
 
 impl eframe::App for NovaCibesEditor {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx();
         ctx.set_visuals(egui::Visuals::dark());
         if self.running { ctx.request_repaint(); }
         if let Some(rx) = &mut self.rx {
@@ -254,10 +260,7 @@ impl eframe::App for NovaCibesEditor {
                 self.rx = None;
             }
         }
-    }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx();
         if self.token_prompt_open {
             egui::Window::new("Enter Hugging Face API Token")
                 .collapsible(false).resizable(false)
