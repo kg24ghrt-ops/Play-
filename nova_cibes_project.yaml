@@ -354,8 +354,7 @@ project:
                             self.open_files.push(EditorTab::new_empty());
                             self.active_tab = self.open_files.len() - 1;
                         }
-                        if let Some(i) = close_idx {
-                            self.active_tab = i;
+                        if let Some(_i) = close_idx {
                             self.close_active_tab();
                         }
                     });
@@ -377,7 +376,7 @@ project:
                     ui.heading("Output");
                     ui.separator();
                     egui::ScrollArea::vertical().auto_shrink([false;2]).show(ui, |ui| {
-                        ui.add(egui::TextEdit::multiline(&mut self.output_text.clone())
+                        ui.add(egui::TextEdit::multiline(&mut self.output_text)
                             .font(egui::FontId::monospace(13.0))
                             .interactive(false)
                             .desired_width(f32::INFINITY));

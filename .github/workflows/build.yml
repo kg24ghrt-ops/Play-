@@ -98,7 +98,9 @@ jobs:
           # Create universal bundle structure (copy from Intel)
           mkdir -p "final_bundle/NovaCibes Editor.app/Contents/MacOS"
           cp -R "$INTEL_APP/Contents/Info.plist" "final_bundle/NovaCibes Editor.app/Contents/"
-          cp -R "$INTEL_APP/Contents/Resources" "final_bundle/NovaCibes Editor.app/Contents/"
+          if [ -d "$INTEL_APP/Contents/Resources" ]; then
+            cp -R "$INTEL_APP/Contents/Resources" "final_bundle/NovaCibes Editor.app/Contents/"
+          fi
 
           # Combine binaries
           lipo -create "$INTEL_BIN" "$ARM_BIN" -output "final_bundle/NovaCibes Editor.app/Contents/MacOS/NovaCibes Editor"

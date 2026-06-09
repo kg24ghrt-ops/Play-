@@ -194,8 +194,7 @@ impl NovaCibesEditor {
 
     fn save_active(&mut self) {
         if self.active_tab >= self.open_files.len() { return; }
-        if self.open_files[self.active_tab].path.is_some() {
-            let path = self.open_files[self.active_tab].path.clone().unwrap();
+        if let Some(path) = self.open_files[self.active_tab].path.clone() {
             let code = self.open_files[self.active_tab].code.clone();
             if std::fs::write(&path, &code).is_ok() {
                 self.open_files[self.active_tab].modified = false;
@@ -312,8 +311,7 @@ impl eframe::App for NovaCibesEditor {
                     self.open_files.push(EditorTab::new_empty());
                     self.active_tab = self.open_files.len() - 1;
                 }
-                if let Some(i) = close_idx {
-                    self.active_tab = i;
+                if let Some(_i) = close_idx {
                     self.close_active_tab();
                 }
             });
@@ -335,7 +333,7 @@ impl eframe::App for NovaCibesEditor {
             ui.heading("Output");
             ui.separator();
             egui::ScrollArea::vertical().auto_shrink([false;2]).show(ui, |ui| {
-                ui.add(egui::TextEdit::multiline(&mut self.output_text.clone())
+                ui.add(egui::TextEdit::multiline(&mut self.output_text)
                     .font(egui::FontId::monospace(13.0))
                     .interactive(false)
                     .desired_width(f32::INFINITY));
