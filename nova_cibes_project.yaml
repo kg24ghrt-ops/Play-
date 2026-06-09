@@ -31,7 +31,13 @@ project:
         codegen-units = 1
 
         [package.metadata.packager]
-        macos-minimum-system-version = "11.0"
+        product_name = "NovaCibes Editor"
+        identifier = "com.novacibes.editor"
+        macos_minimum_system_version = "11.0"
+
+        [package.metadata.bundle]
+        name = "NovaCibes Editor"
+        identifier = "com.novacibes.editor"
     - path: "src/main.rs"
       content: |
         #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
