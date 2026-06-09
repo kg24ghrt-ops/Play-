@@ -7,7 +7,7 @@ description = "A native macOS code editor that runs Python via a remote API."
 [dependencies]
 eframe = "0.34.2"
 egui = "0.34.2"
-egui_code_editor = "0.2.12"
+egui_code_editor = "0.2.27"
 syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
 reqwest = { version = "0.12.24", features = ["json"] }
 tokio = { version = "1.45.1", features = ["full"] }
@@ -22,3 +22,12 @@ opt-level = 2
 strip = true
 lto = true
 codegen-units = 1
+
+[package.metadata.packager]
+product-name = "NovaCibes Editor"
+identifier = "com.novacibes.editor"
+macos-minimum-system-version = "11.0"
+
+[package.metadata.bundle]
+name = "NovaCibes Editor"
+identifier = "com.novacibes.editor"
