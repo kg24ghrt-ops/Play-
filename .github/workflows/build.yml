@@ -74,27 +74,30 @@ jobs:
 
       - name: Extract .app bundles from DMGs
         run: |
-          mkdir -p intel_mount arm_mount universal_bundle
+          mkdir -p intel_mount arm_mount intel_app arm_app universal_bundle
           # Mount Intel DMG and copy .app
           hdiutil attach intel/NovaCibes-Editor-x86_64-apple-darwin.dmg -mountpoint intel_mount
-          cp -R intel_mount/*.app universal_bundle/
+          cp -R intel_mount/*.app intel_app/
           hdiutil detach intel_mount
           # Mount ARM DMG and copy .app
           hdiutil attach arm/NovaCibes-Editor-aarch64-apple-darwin.dmg -mountpoint arm_mount
-          cp -R arm_mount/*.app universal_bundle/
+          cp -R arm_mount/*.app arm_app/
           hdiutil detach arm_mount
 
       - name: Create universal binary from the two .app bundles
         run: |
-          INTEL_BIN="universal_bundle/NovaCibes Editor.app/Contents/MacOS/NovaCibes Editor"
-          ARM_BIN="universal_bundle/NovaCibes Editor 2.app/Contents/MacOS/NovaCibes Editor"
-          # The two .app bundles have slightly different names; find the correct one
-          INTEL_BIN=$(find universal_bundle -name "*.app" -path "*x86_64*" -or -name "*.app" | head -1)/Contents/MacOS/*
-          ARM_BIN=$(find universal_bundle -name "*.app" -path "*aarch64*" -or -name "*.app" | head -1)/Contents/MacOS/*
-          # Simplify: just create universal binary from the two executables
-          mkdir -p universal_bundle/NovaCibes\ Editor.app/Contents/MacOS
-          lipo -create "$INTEL_BIN" "$ARM_BIN" -output universal_bundle/NovaCibes\ Editor.app/Contents/MacOS/NovaCibes\ Editor
-          chmod +x universal_bundle/NovaCibes\ Editor.app/Contents/MacOS/NovaCibes\ Editor
+          # The apps are now in intel_app and arm_app
+          # Prepare the universal app by copying one of them
+          cp -R intel_app/*.app "universal_bundle/NovaCibes Editor.app"
+
+          # Find the binary paths
+          # We use find to be name-agnostic but assume they are standard bundles
+          INTEL_BIN=$(find intel_app -name "NovaCibes Editor" -path "*/Contents/MacOS/*")
+          ARM_BIN=$(find arm_app -name "NovaCibes Editor" -path "*/Contents/MacOS/*")
+
+          # Create universal binary and overwrite the one in the universal bundle
+          lipo -create "$INTEL_BIN" "$ARM_BIN" -output "universal_bundle/NovaCibes Editor.app/Contents/MacOS/NovaCibes Editor"
+          chmod +x "universal_bundle/NovaCibes Editor.app/Contents/MacOS/NovaCibes Editor"
 
       - name: Package universal .app into final DMG
         run: |
