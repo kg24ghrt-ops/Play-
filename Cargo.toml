@@ -34,3 +34,7 @@ formats = ["app", "dmg"]
 
 [package.metadata.packager.macos]
 minimum_system_version = "11.0"
+
+[package.metadata.bundle]
+name = "NovaCibes Editor"
+identifier = "com.novacibes.editor"

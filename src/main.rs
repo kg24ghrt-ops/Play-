@@ -138,13 +138,11 @@ impl NovaCibesEditor {
         if self.running { return; }
 
         let token = self.api_token.clone().unwrap();
-        let payload_code = if self.run_all_tabs {
-            self.open_files.iter()
-                .map(|t| format!("# File: {}\n{}\n", t.title(), t.code))
-                .collect::<Vec<_>>()
-                .join("\n# ---\n\n")
+        let jobs: Vec<(String, String)> = if self.run_all_tabs {
+            self.open_files.iter().map(|t| (t.title(), t.code.clone())).collect()
         } else {
-            self.open_files[self.active_tab].code.clone()
+            let t = &self.open_files[self.active_tab];
+            vec![(t.title(), t.code.clone())]
         };
 
         self.running = true;
@@ -155,31 +153,35 @@ impl NovaCibesEditor {
 
         RT.spawn(async move {
             let client = reqwest::Client::new();
-            let req = RunRequest { code: payload_code };
-            let resp = client.post(format!("{}/run", API_BASE))
-                .header("Authorization", format!("Bearer {}", token))
-                .header("Content-Type", "application/json")
-                .json(&req)
-                .send()
-                .await;
+            let mut results = Vec::new();
+            for (title, code) in jobs {
+                let req = RunRequest { code };
+                let resp = client.post(format!("{}/run", API_BASE))
+                    .header("Authorization", format!("Bearer {}", token))
+                    .header("Content-Type", "application/json")
+                    .json(&req)
+                    .send()
+                    .await;
 
-            let block = match resp {
-                Ok(r) => {
-                    let status = r.status();
-                    let body = r.text().await.unwrap_or_default();
-                    if status.is_success() {
-                        if let Ok(parsed) = serde_json::from_str::<RunResponse>(&body) {
-                            let out = parsed.stdout.unwrap_or_default();
-                            let err = parsed.stderr.unwrap_or_default();
-                            format!("{}{}", out, err)
-                        } else { body }
-                    } else {
-                        format!("HTTP {}: {}", status.as_u16(), body)
-                    }
-                },
-                Err(e) => format!("Request failed: {}", e),
-            };
-            let _ = tx.send(block);
+                let block = match resp {
+                    Ok(r) => {
+                        let status = r.status();
+                        let body = r.text().await.unwrap_or_default();
+                        if status.is_success() {
+                            if let Ok(parsed) = serde_json::from_str::<RunResponse>(&body) {
+                                let out = parsed.stdout.unwrap_or_default();
+                                let err = parsed.stderr.unwrap_or_default();
+                                format!("{}{}", out, err)
+                            } else { body }
+                        } else {
+                            format!("HTTP {}: {}", status.as_u16(), body)
+                        }
+                    },
+                    Err(e) => format!("Request failed: {}", e),
+                };
+                results.push(format!("--- {} ---\n{}", title, block));
+            }
+            let _ = tx.send(results.join("\n\n"));
         });
     }
 
@@ -313,8 +315,7 @@ impl eframe::App for NovaCibesEditor {
             ui.heading("Output");
             ui.separator();
             egui::ScrollArea::vertical().auto_shrink([false;2]).show(ui, |ui| {
-                let mut out = self.output_text.clone();
-                ui.add(egui::TextEdit::multiline(&mut out)
+                ui.add(egui::TextEdit::multiline(&mut self.output_text)
                     .font(egui::FontId::monospace(13.0))
                     .interactive(false)
                     .desired_width(f32::INFINITY));
