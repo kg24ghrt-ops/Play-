@@ -287,7 +287,7 @@ impl eframe::App for NovaCibesApp {
             });
         });
 
-        egui::Panel::right("console_panel").default_size(300.0).show_inside(ui, |ui| {
+        egui::Panel::right("console_panel").default_size(300.0).resizable(true).show_inside(ui, |ui| {
             ui.heading("Console Output");
             egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
                 ui.add(
