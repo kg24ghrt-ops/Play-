@@ -1,16 +1,21 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
-use std::path::PathBuf;
-use directories::ProjectDirs;
+use eframe::egui;
+use egui_code_editor::{CodeEditor, ColorTheme, Syntax};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use std::collections::BTreeSet;
+use std::path::PathBuf;
+use std::sync::mpsc::{channel, Receiver, Sender};
+use tokio::runtime::{Builder, Runtime};
+use directories::ProjectDirs;
 
-static RT: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
-    tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime")
+static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
+    Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to create Tokio runtime")
 });
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct RunRequest {
     code: String,
 }
@@ -21,313 +26,334 @@ struct RunResponse {
     stderr: Option<String>,
 }
 
-const API_BASE: &str = "https://novacibes-python-running-api.hf.space";
-
-struct EditorTab {
+struct Tab {
     path: Option<PathBuf>,
-    code: String,
-    modified: bool,
+    content: String,
+    saved_content: String,
 }
 
-impl EditorTab {
+impl Tab {
     fn new_empty() -> Self {
-        Self { path: None, code: String::new(), modified: false }
-    }
-    fn title(&self) -> String {
-        let name = self.path.as_ref()
-            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-            .unwrap_or_else(|| "Untitled".into());
-        if self.modified { format!("{} *", name) } else { name }
-    }
-}
-
-struct NovaCibesEditor {
-    open_files: Vec<EditorTab>,
-    active_tab: usize,
-    output_text: String,
-    status_message: String,
-    running: bool,
-    api_token: Option<String>,
-    token_prompt_open: bool,
-    temp_token: String,
-    run_all_tabs: bool,
-    rx: Option<mpsc::UnboundedReceiver<String>>,
-}
-
-impl NovaCibesEditor {
-    fn new() -> Self {
-        let (token, prompt) = Self::load_token();
         Self {
-            open_files: vec![EditorTab::new_empty()],
-            active_tab: 0,
-            output_text: String::new(),
-            status_message: "Idle".into(),
-            running: false,
-            api_token: token,
-            token_prompt_open: prompt,
-            temp_token: String::new(),
-            run_all_tabs: false,
-            rx: None,
+            path: None,
+            content: String::new(),
+            saved_content: String::new(),
         }
     }
 
-    fn token_path() -> Option<PathBuf> {
-        ProjectDirs::from("com", "novacibes", "editor")
-            .map(|d| d.config_dir().join("token.txt"))
+    fn name(&self) -> String {
+        let base = self.path.as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("Untitled");
+        if self.content != self.saved_content {
+            format!("{}*", base)
+        } else {
+            base.to_string()
+        }
+    }
+}
+
+struct NovaCibesApp {
+    tabs: Vec<Tab>,
+    active_tab_index: usize,
+    token: Option<String>,
+    token_input: String,
+    show_token_prompt: bool,
+    output: String,
+    is_running: bool,
+    run_all: bool,
+    tx: Sender<String>,
+    rx: Receiver<String>,
+}
+
+impl NovaCibesApp {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+
+        let (tx, rx) = channel();
+        let mut app = Self {
+            tabs: vec![Tab::new_empty()],
+            active_tab_index: 0,
+            token: None,
+            token_input: String::new(),
+            show_token_prompt: false,
+            output: String::new(),
+            is_running: false,
+            run_all: false,
+            tx,
+            rx,
+        };
+
+        app.load_token();
+        app
     }
 
-    fn load_token() -> (Option<String>, bool) {
-        if let Some(path) = Self::token_path() {
-            if let Ok(t) = std::fs::read_to_string(&path) {
-                let t = t.trim().to_string();
-                if !t.is_empty() { return (Some(t), false); }
+    fn load_token(&mut self) {
+        if let Some(dirs) = ProjectDirs::from("com", "novacibes", "editor") {
+            let path = dirs.data_dir().join("token.txt");
+            if let Ok(token) = std::fs::read_to_string(path) {
+                self.token = Some(token.trim().to_string());
+            } else {
+                self.show_token_prompt = true;
             }
         }
-        (None, true)
     }
 
-    fn save_token(token: &str) {
-        if let Some(path) = Self::token_path() {
-            let _ = std::fs::create_dir_all(path.parent().unwrap());
-            let _ = std::fs::write(&path, token);
+    fn save_token(&mut self) {
+        if let Some(dirs) = ProjectDirs::from("com", "novacibes", "editor") {
+            let path = dirs.data_dir();
+            let _ = std::fs::create_dir_all(path);
+            let file_path = path.join("token.txt");
+            if std::fs::write(file_path, &self.token_input).is_ok() {
+                self.token = Some(self.token_input.clone());
+                self.show_token_prompt = false;
+            }
         }
     }
 
-    fn run_code(&mut self) {
-        if self.api_token.is_none() {
-            self.output_text = "Error: No API token. Enter it in the prompt.\n".into();
-            return;
-        }
-        if self.running { return; }
+    fn run_execution(&mut self, ctx: egui::Context) {
+        if self.token.is_none() { return; }
 
-        let token = self.api_token.clone().unwrap();
-        let jobs: Vec<(String, String)> = if self.run_all_tabs {
-            self.open_files.iter().map(|t| (t.title(), t.code.clone())).collect()
+        let token = self.token.clone().unwrap();
+        let codes: Vec<(String, String)> = if self.run_all {
+            self.tabs.iter().map(|t| (t.name(), t.content.clone())).collect()
         } else {
-            let t = &self.open_files[self.active_tab];
-            vec![(t.title(), t.code.clone())]
+            let tab = &self.tabs[self.active_tab_index];
+            vec![(tab.name(), tab.content.clone())]
         };
 
-        self.running = true;
-        self.status_message = if jobs.len() == 1 {
-            format!("Running {}...", jobs[0].0)
-        } else {
-            format!("Running {} files...", jobs.len())
-        };
+        self.is_running = true;
+        let tx = self.tx.clone();
 
-        let (tx, rx) = mpsc::unbounded_channel();
-        self.rx = Some(rx);
-
-        RT.spawn(async move {
+        RUNTIME.spawn(async move {
             let client = reqwest::Client::new();
-            let mut results = Vec::new();
-            for (title, code) in &jobs {
-                let req = RunRequest { code: code.clone() };
-                let resp = client.post(format!("{}/run", API_BASE))
+            let mut final_output = String::new();
+            let num_codes = codes.len();
+
+            for (i, (name, code)) in codes.into_iter().enumerate() {
+                if i > 0 { final_output.push_str("\n--- Next File ---\n"); }
+                else if num_codes > 1 { final_output.push_str(&format!("===== {} =====\n", name)); }
+
+                let res = client.post("https://novacibes-python-running-api.hf.space/run")
                     .header("Authorization", format!("Bearer {}", token))
-                    .header("Content-Type", "application/json")
-                    .json(&req)
+                    .json(&RunRequest { code })
                     .send()
                     .await;
 
-                let block = match resp {
-                    Ok(r) => {
-                        let status = r.status();
-                        let body = r.text().await.unwrap_or_default();
+                match res {
+                    Ok(resp) => {
+                        let status = resp.status();
+                        let body = resp.text().await.unwrap_or_default();
                         if status.is_success() {
-                            if let Ok(parsed) = serde_json::from_str::<RunResponse>(&body) {
-                                let out = parsed.stdout.unwrap_or_default();
-                                let err = parsed.stderr.unwrap_or_default();
-                                format!("{}{}", out, err)
-                            } else { body }
+                            if let Ok(run_res) = serde_json::from_str::<RunResponse>(&body) {
+                                if let Some(out) = run_res.stdout { final_output.push_str(&out); }
+                                if let Some(err) = run_res.stderr { final_output.push_str(&err); }
+                            } else {
+                                final_output.push_str(&body);
+                            }
                         } else {
-                            format!("HTTP {}: {}", status.as_u16(), body)
+                            final_output.push_str(&format!("API Error ({}): {}", status, body));
                         }
-                    },
-                    Err(e) => format!("Request failed: {}", e),
-                };
-                if jobs.len() > 1 {
-                    results.push(format!("===== {} =====\n{}", title, block));
-                } else { results.push(block); }
+                    }
+                    Err(e) => final_output.push_str(&format!("Network Error: {}", e)),
+                }
             }
-            let _ = tx.send(results.join("\n"));
+            let _ = tx.send(final_output);
+            ctx.request_repaint();
         });
     }
 
-    fn save_active(&mut self) {
-        if self.active_tab >= self.open_files.len() { return; }
-        let tab = &mut self.open_files[self.active_tab];
-        if let Some(path) = &tab.path {
-            if std::fs::write(path, &tab.code).is_ok() {
-                tab.modified = false;
-                self.status_message = format!("Saved {}", tab.title());
+    fn save_tab(&mut self, index: usize) {
+        if let Some(tab) = self.tabs.get_mut(index) {
+            if let Some(path) = &tab.path {
+                if std::fs::write(path, &tab.content).is_ok() {
+                    tab.saved_content = tab.content.clone();
+                }
             } else {
-                self.status_message = "Error saving".into();
-            }
-        } else {
-            drop(tab); // borrow split
-            self.save_active_as();
-        }
-    }
-
-    fn save_active_as(&mut self) {
-        if self.active_tab >= self.open_files.len() { return; }
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Python", &["py"])
-            .save_file()
-        {
-            let tab = &mut self.open_files[self.active_tab];
-            if std::fs::write(&path, &tab.code).is_ok() {
-                tab.path = Some(path);
-                tab.modified = false;
-                self.status_message = format!("Saved {}", tab.title());
-            } else {
-                self.status_message = "Save failed".into();
+                self.save_tab_as(index);
             }
         }
     }
 
-    fn close_active_tab(&mut self) {
-        if self.open_files.len() <= 1 {
-            self.open_files = vec![EditorTab::new_empty()];
-            self.active_tab = 0;
-            return;
-        }
-        self.open_files.remove(self.active_tab);
-        if self.active_tab >= self.open_files.len() {
-            self.active_tab = self.active_tab.saturating_sub(1);
+    fn save_tab_as(&mut self, index: usize) {
+        if let Some(tab) = self.tabs.get_mut(index) {
+            if let Some(path) = rfd::FileDialog::new().add_filter("Python", &["py"]).save_file() {
+                if std::fs::write(&path, &tab.content).is_ok() {
+                    tab.path = Some(path);
+                    tab.saved_content = tab.content.clone();
+                }
+            }
         }
     }
 }
 
-impl eframe::App for NovaCibesEditor {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        ctx.set_visuals(egui::Visuals::dark());
+impl eframe::App for NovaCibesApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        while let Ok(new_output) = self.rx.try_recv() {
+            self.output = new_output;
+            self.is_running = false;
+        }
 
-        if self.token_prompt_open {
-            egui::Window::new("Enter Hugging Face API Token")
-                .collapsible(false).resizable(false)
+        if self.show_token_prompt {
+            egui::Window::new("Enter API Token")
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.label("Paste your personal access token:");
-                    ui.text_edit_singleline(&mut self.temp_token);
-                    if ui.button("OK").clicked() && !self.temp_token.trim().is_empty() {
-                        self.api_token = Some(self.temp_token.trim().to_string());
-                        Self::save_token(self.temp_token.trim());
-                        self.temp_token.clear();
-                        self.token_prompt_open = false;
+                .collapsible(false)
+                .resizable(false)
+                .show(ui.ctx(), |ui| {
+                    ui.label("Hugging Face Personal Access Token:");
+                    ui.text_edit_singleline(&mut self.token_input);
+                    if ui.button("Save").clicked() {
+                        self.save_token();
                     }
                 });
         }
 
-        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+        egui::Panel::top("menu_bar").show_inside(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("New Tab").clicked() {
-                        self.open_files.push(EditorTab::new_empty());
-                        self.active_tab = self.open_files.len() - 1;
-                        ui.close_menu();
+                        self.tabs.push(Tab::new_empty());
+                        self.active_tab_index = self.tabs.len() - 1;
+                        ui.close();
                     }
-                    if ui.button("Open…").clicked() {
+                    if ui.button("Open...").clicked() {
                         if let Some(path) = rfd::FileDialog::new().add_filter("Python", &["py"]).pick_file() {
-                            if let Ok(code) = std::fs::read_to_string(&path) {
-                                let cur = &self.open_files[self.active_tab];
-                                if !cur.modified && cur.code.is_empty() && cur.path.is_none() {
-                                    let tab = &mut self.open_files[self.active_tab];
-                                    tab.code = code; tab.path = Some(path); tab.modified = false;
-                                } else {
-                                    self.open_files.push(EditorTab { path: Some(path), code, modified: false });
-                                    self.active_tab = self.open_files.len() - 1;
-                                }
+                            if let Ok(content) = std::fs::read_to_string(&path) {
+                                self.tabs.push(Tab {
+                                    path: Some(path),
+                                    content: content.clone(),
+                                    saved_content: content,
+                                });
+                                self.active_tab_index = self.tabs.len() - 1;
                             }
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
-                    if ui.button("Save").clicked() { self.save_active(); ui.close_menu(); }
-                    if ui.button("Save As…").clicked() { self.save_active_as(); ui.close_menu(); }
-                    if ui.button("Close Tab").clicked() { self.close_active_tab(); ui.close_menu(); }
+                    if ui.button("Save").clicked() {
+                        self.save_tab(self.active_tab_index);
+                        ui.close();
+                    }
+                    if ui.button("Save As...").clicked() {
+                        self.save_tab_as(self.active_tab_index);
+                        ui.close();
+                    }
+                    if ui.button("Close Tab").clicked() {
+                        self.tabs.remove(self.active_tab_index);
+                        if self.tabs.is_empty() { self.tabs.push(Tab::new_empty()); }
+                        self.active_tab_index = self.active_tab_index.min(self.tabs.len() - 1);
+                        ui.close();
+                    }
                 });
             });
         });
 
-        egui::TopBottomPanel::top("tab_bar").show(ctx, |ui| {
+        egui::Panel::top("tab_bar").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
-                let mut close_idx = None;
-                for (i, tab) in self.open_files.iter().enumerate() {
-                    let fill = if i == self.active_tab { egui::Color32::from_rgb(60,60,60) } else { egui::Color32::from_rgb(40,40,40) };
-                    if ui.add(egui::Button::new(tab.title()).fill(fill)).clicked() { self.active_tab = i; }
-                    if ui.small_button("x").clicked() { close_idx = Some(i); }
-                }
-                if ui.small_button("+").clicked() {
-                    self.open_files.push(EditorTab::new_empty());
-                    self.active_tab = self.open_files.len() - 1;
-                }
-                if let Some(i) = close_idx { self.close_active_tab(); }
-            });
-        });
-
-        egui::SidePanel::right("output_panel").resizable(true).default_width(300.0).show(ctx, |ui| {
-            ui.heading("Output");
-            ui.separator();
-            egui::ScrollArea::vertical().auto_shrink([false;2]).show(ui, |ui| {
-                ui.add(egui::TextEdit::multiline(&mut self.output_text.as_str())
-                    .font(egui::FontId::monospace(13.0))
-                    .interactive(false)
-                    .desired_width(f32::INFINITY));
-            });
-            if ui.button("Clear Output").clicked() { self.output_text.clear(); }
-        });
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            if self.active_tab < self.open_files.len() {
-                let tab = &mut self.open_files[self.active_tab];
-                let mut editor = egui_code_editor::CodeEditor::default()
-                    .with_language("python")
-                    .with_theme("monokai")
-                    .with_rows(25)
-                    .with_fontsize(14.0)
-                    .with_id_source(format!("tab_{}", self.active_tab));
-                editor.set_text(&tab.code);
-                if let Some(new_text) = editor.show(ui).get_text() {
-                    if new_text != tab.code {
-                        tab.code = new_text.to_string();
-                        tab.modified = true;
+                let mut tab_to_close = None;
+                for (i, tab) in self.tabs.iter().enumerate() {
+                    let is_active = i == self.active_tab_index;
+                    if ui.selectable_label(is_active, tab.name()).clicked() {
+                        self.active_tab_index = i;
+                    }
+                    if ui.small_button("x").clicked() {
+                        tab_to_close = Some(i);
                     }
                 }
-            }
-        });
-
-        egui::TopBottomPanel::bottom("bottom_bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                let can_run = !self.running && self.api_token.is_some();
-                if ui.add_enabled(can_run, egui::Button::new("▶ Run")).clicked() {
-                    self.run_code();
+                if let Some(idx) = tab_to_close {
+                    self.tabs.remove(idx);
+                    if self.tabs.is_empty() { self.tabs.push(Tab::new_empty()); }
+                    self.active_tab_index = self.active_tab_index.min(self.tabs.len() - 1);
                 }
-                ui.checkbox(&mut self.run_all_tabs, "Run all open files");
-                if self.running { ui.add(egui::Spinner::new()); }
-                ui.label(&self.status_message);
             });
         });
 
-        if let Some(rx) = &mut self.rx {
-            if let Ok(result) = rx.try_recv() {
-                self.output_text = result;
-                self.running = false;
-                self.status_message = "Idle".into();
-                self.rx = None;
-            }
-        }
-        if self.running { ctx.request_repaint(); }
+        egui::Panel::bottom("bottom_bar").show_inside(ui, |ui| {
+            ui.horizontal(|ui| {
+                if self.is_running {
+                    ui.spinner();
+                    ui.label("Running...");
+                } else {
+                    if ui.button("Run").clicked() {
+                        self.run_execution(ui.ctx().clone());
+                    }
+                }
+                ui.checkbox(&mut self.run_all, "Run all open files");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Clear Output").clicked() {
+                        self.output.clear();
+                    }
+                });
+            });
+        });
+
+        egui::Panel::right("console_panel").default_size(300.0).show_inside(ui, |ui| {
+            ui.heading("Console Output");
+            egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.output)
+                        .font(egui::TextStyle::Monospace)
+                        .desired_width(f32::INFINITY)
+                );
+            });
+        });
+
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            let tab = &mut self.tabs[self.active_tab_index];
+            let theme = monokai_theme();
+            CodeEditor::default()
+                .id_source("code_editor")
+                .with_syntax(python_syntax())
+                .with_theme(theme)
+                .with_numlines(true)
+                .show(ui, &mut tab.content);
+        });
     }
 }
 
-fn main() {
-    let _ = &*RT;
-    let opts = eframe::NativeOptions {
+fn python_syntax() -> Syntax {
+    Syntax {
+        language: "Python",
+        case_sensitive: true,
+        comment: "#",
+        comment_multiline: ["\"\"\"", "\"\"\""],
+        hyperlinks: BTreeSet::from(["http", "https"]),
+        keywords: BTreeSet::from(["def", "class", "if", "else", "elif", "for", "while", "return", "import", "from", "as", "try", "except", "finally", "with", "lambda", "yield", "pass", "break", "continue", "in", "is", "not", "and", "or", "None", "True", "False"]),
+        types: BTreeSet::from(["int", "float", "str", "list", "dict", "set", "tuple", "bool"]),
+        special: BTreeSet::from(["self", "cls"]),
+        quotes: BTreeSet::from(['"', '\'']),
+    }
+}
+
+fn monokai_theme() -> ColorTheme {
+    ColorTheme {
+        name: "Monokai",
+        dark: true,
+        bg: "#272822",
+        cursor: "#F8F8F2",
+        selection: "#49483E",
+        comments: "#75715E",
+        functions: "#A6E22E",
+        keywords: "#F92672",
+        literals: "#AE81FF",
+        numerics: "#AE81FF",
+        punctuation: "#F8F8F2",
+        strs: "#E6DB74",
+        types: "#66D9EF",
+        special: "#FD971F",
+    }
+}
+
+fn main() -> eframe::Result<()> {
+    let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([900.0, 600.0])
-            .with_min_inner_size([800.0, 500.0]),
+            .with_inner_size([1024.0, 768.0])
+            .with_title("NovaCibes Editor"),
         ..Default::default()
     };
-    eframe::run_native("NovaCibes Editor", opts, Box::new(|_cc| Ok(Box::new(NovaCibesEditor::new())))).unwrap();
-            }
+    eframe::run_native(
+        "NovaCibes Editor",
+        options,
+        Box::new(|cc| Ok(Box::new(NovaCibesApp::new(cc)))),
+    )
+}
