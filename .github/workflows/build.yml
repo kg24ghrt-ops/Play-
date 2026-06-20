@@ -77,21 +77,20 @@ jobs:
           mkdir -p intel_mount arm_mount intel_app arm_app universal_app
           # Mount Intel DMG and copy .app
           hdiutil attach intel/NovaCibes-Editor-x86_64-apple-darwin.dmg -mountpoint intel_mount
-          cp -R intel_mount/*.app intel_app/
+          cp -R "intel_mount/NovaCibes Editor.app" intel_app/
           hdiutil detach intel_mount
           # Mount ARM DMG and copy .app
           hdiutil attach arm/NovaCibes-Editor-aarch64-apple-darwin.dmg -mountpoint arm_mount
-          cp -R arm_mount/*.app arm_app/
+          cp -R "arm_mount/NovaCibes Editor.app" arm_app/
           hdiutil detach arm_mount
 
       - name: Create universal binary from the two .app bundles
         run: |
           # Use Intel app as base for universal app
-          cp -R intel_app/*.app universal_app/
-          mv universal_app/*.app "universal_app/NovaCibes Editor.app"
+          cp -R "intel_app/NovaCibes Editor.app" universal_app/
 
-          INTEL_BIN=$(ls -d intel_app/*.app/Contents/MacOS/* | head -1)
-          ARM_BIN=$(ls -d arm_app/*.app/Contents/MacOS/* | head -1)
+          INTEL_BIN="intel_app/NovaCibes Editor.app/Contents/MacOS/NovaCibes Editor"
+          ARM_BIN="arm_app/NovaCibes Editor.app/Contents/MacOS/NovaCibes Editor"
           OUTPUT_BIN="universal_app/NovaCibes Editor.app/Contents/MacOS/NovaCibes Editor"
 
           lipo -create "$INTEL_BIN" "$ARM_BIN" -output "$OUTPUT_BIN"
