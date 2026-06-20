@@ -1,0 +1,545 @@
+project:
+  name: "NovaCibes Editor"
+  version: "0.1.0"
+  description: "A native macOS code editor that runs Python via a remote API."
+  files:
+    - path: Cargo.toml
+      content: |
+        [package]
+        name = "novacibes-editor"
+        version = "0.1.0"
+        edition = "2021"
+        description = "A native macOS code editor that runs Python via a remote API."
+
+        [dependencies]
+        eframe = "0.34"
+        egui = "0.34"
+        egui_code_editor = "0.2.27"
+        syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+        reqwest = { version = "0.12", features = ["json"] }
+        tokio = { version = "1", features = ["full"] }
+        serde = { version = "1", features = ["derive"] }
+        serde_json = "1"
+        rfd = "0.15"
+        directories = "6"
+        once_cell = "1"
+
+        [package.metadata.bundle]
+        name = "NovaCibes Editor"
+        identifier = "com.novacibes.editor"
+
+        [package.metadata.packager]
+        name = "NovaCibes Editor"
+        identifier = "com.novacibes.editor"
+        version = "0.1.0"
+        authors = ["NovaCibes"]
+        product_name = "NovaCibes Editor"
+        formats = ["app", "dmg"]
+
+        [package.metadata.packager.macos]
+        minimum_system_version = "11.0"
+
+        [profile.release]
+        opt-level = 2
+        strip = true
+        lto = true
+        codegen-units = 1
+
+    - path: src/main.rs
+      content: |
+        use eframe::egui;
+        use egui_code_editor::{CodeEditor, ColorTheme, Syntax};
+        use once_cell::sync::Lazy;
+        use serde::{Deserialize, Serialize};
+        use std::collections::BTreeSet;
+        use std::path::PathBuf;
+        use std::sync::mpsc::{channel, Receiver, Sender};
+        use tokio::runtime::{Builder, Runtime};
+        use directories::ProjectDirs;
+
+        static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
+            Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create Tokio runtime")
+        });
+
+        #[derive(Serialize, Deserialize)]
+        struct RunRequest {
+            code: String,
+        }
+
+        #[derive(Deserialize)]
+        struct RunResponse {
+            stdout: Option<String>,
+            stderr: Option<String>,
+        }
+
+        struct Tab {
+            path: Option<PathBuf>,
+            content: String,
+            saved_content: String,
+        }
+
+        impl Tab {
+            fn new_empty() -> Self {
+                Self {
+                    path: None,
+                    content: String::new(),
+                    saved_content: String::new(),
+                }
+            }
+
+            fn name(&self) -> String {
+                let base = self.path.as_ref()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("Untitled");
+                if self.content != self.saved_content {
+                    format!("{}*", base)
+                } else {
+                    base.to_string()
+                }
+            }
+        }
+
+        struct NovaCibesApp {
+            tabs: Vec<Tab>,
+            active_tab_index: usize,
+            token: Option<String>,
+            token_input: String,
+            show_token_prompt: bool,
+            output: String,
+            is_running: bool,
+            run_all: bool,
+            tx: Sender<String>,
+            rx: Receiver<String>,
+        }
+
+        impl NovaCibesApp {
+            fn new(cc: &eframe::CreationContext<'_>) -> Self {
+                cc.egui_ctx.set_visuals(egui::Visuals::dark());
+
+                let (tx, rx) = channel();
+                let mut app = Self {
+                    tabs: vec![Tab::new_empty()],
+                    active_tab_index: 0,
+                    token: None,
+                    token_input: String::new(),
+                    show_token_prompt: false,
+                    output: String::new(),
+                    is_running: false,
+                    run_all: false,
+                    tx,
+                    rx,
+                };
+
+                app.load_token();
+                app
+            }
+
+            fn load_token(&mut self) {
+                if let Some(dirs) = ProjectDirs::from("com", "novacibes", "editor") {
+                    let path = dirs.data_dir().join("token.txt");
+                    if let Ok(token) = std::fs::read_to_string(path) {
+                        self.token = Some(token.trim().to_string());
+                    } else {
+                        self.show_token_prompt = true;
+                    }
+                }
+            }
+
+            fn save_token(&mut self) {
+                if let Some(dirs) = ProjectDirs::from("com", "novacibes", "editor") {
+                    let path = dirs.data_dir();
+                    let _ = std::fs::create_dir_all(path);
+                    let file_path = path.join("token.txt");
+                    if std::fs::write(file_path, &self.token_input).is_ok() {
+                        self.token = Some(self.token_input.clone());
+                        self.show_token_prompt = false;
+                    }
+                }
+            }
+
+            fn run_execution(&mut self, ctx: egui::Context) {
+                if self.token.is_none() { return; }
+
+                let token = self.token.clone().unwrap();
+                let codes: Vec<(String, String)> = if self.run_all {
+                    self.tabs.iter().map(|t| (t.name(), t.content.clone())).collect()
+                } else {
+                    let tab = &self.tabs[self.active_tab_index];
+                    vec![(tab.name(), tab.content.clone())]
+                };
+
+                self.is_running = true;
+                let tx = self.tx.clone();
+
+                RUNTIME.spawn(async move {
+                    let client = reqwest::Client::new();
+                    let mut final_output = String::new();
+                    let num_codes = codes.len();
+
+                    for (i, (name, code)) in codes.into_iter().enumerate() {
+                        if i > 0 { final_output.push_str("\n--- Next File ---\n"); }
+                        else if num_codes > 1 { final_output.push_str(&format!("===== {} =====\n", name)); }
+
+                        let res = client.post("https://novacibes-python-running-api.hf.space/run")
+                            .header("Authorization", format!("Bearer {}", token))
+                            .json(&RunRequest { code })
+                            .send()
+                            .await;
+
+                        match res {
+                            Ok(resp) => {
+                                let status = resp.status();
+                                let body = resp.text().await.unwrap_or_default();
+                                if status.is_success() {
+                                    if let Ok(run_res) = serde_json::from_str::<RunResponse>(&body) {
+                                        if let Some(out) = run_res.stdout { final_output.push_str(&out); }
+                                        if let Some(err) = run_res.stderr { final_output.push_str(&err); }
+                                    } else {
+                                        final_output.push_str(&body);
+                                    }
+                                } else {
+                                    final_output.push_str(&format!("API Error ({}): {}", status, body));
+                                }
+                            }
+                            Err(e) => final_output.push_str(&format!("Network Error: {}", e)),
+                        }
+                    }
+                    let _ = tx.send(final_output);
+                    ctx.request_repaint();
+                });
+            }
+
+            fn save_tab(&mut self, index: usize) {
+                if let Some(tab) = self.tabs.get_mut(index) {
+                    if let Some(path) = &tab.path {
+                        if std::fs::write(path, &tab.content).is_ok() {
+                            tab.saved_content = tab.content.clone();
+                        }
+                    } else {
+                        self.save_tab_as(index);
+                    }
+                }
+            }
+
+            fn save_tab_as(&mut self, index: usize) {
+                if let Some(tab) = self.tabs.get_mut(index) {
+                    if let Some(path) = rfd::FileDialog::new().add_filter("Python", &["py"]).save_file() {
+                        if std::fs::write(&path, &tab.content).is_ok() {
+                            tab.path = Some(path);
+                            tab.saved_content = tab.content.clone();
+                        }
+                    }
+                }
+            }
+        }
+
+        impl eframe::App for NovaCibesApp {
+            fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+                while let Ok(new_output) = self.rx.try_recv() {
+                    self.output = new_output;
+                    self.is_running = false;
+                }
+
+                if self.show_token_prompt {
+                    egui::Window::new("Enter API Token")
+                        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                        .collapsible(false)
+                        .resizable(false)
+                        .show(ui.ctx(), |ui| {
+                            ui.label("Hugging Face Personal Access Token:");
+                            ui.text_edit_singleline(&mut self.token_input);
+                            if ui.button("Save").clicked() {
+                                self.save_token();
+                            }
+                        });
+                }
+
+                egui::Panel::top("menu_bar").show_inside(ui, |ui| {
+                    egui::MenuBar::new().ui(ui, |ui| {
+                        ui.menu_button("File", |ui| {
+                            if ui.button("New Tab").clicked() {
+                                self.tabs.push(Tab::new_empty());
+                                self.active_tab_index = self.tabs.len() - 1;
+                                ui.close();
+                            }
+                            if ui.button("Open...").clicked() {
+                                if let Some(path) = rfd::FileDialog::new().add_filter("Python", &["py"]).pick_file() {
+                                    if let Ok(content) = std::fs::read_to_string(&path) {
+                                        self.tabs.push(Tab {
+                                            path: Some(path),
+                                            content: content.clone(),
+                                            saved_content: content,
+                                        });
+                                        self.active_tab_index = self.tabs.len() - 1;
+                                    }
+                                }
+                                ui.close();
+                            }
+                            if ui.button("Save").clicked() {
+                                self.save_tab(self.active_tab_index);
+                                ui.close();
+                            }
+                            if ui.button("Save As...").clicked() {
+                                self.save_tab_as(self.active_tab_index);
+                                ui.close();
+                            }
+                            if ui.button("Close Tab").clicked() {
+                                self.tabs.remove(self.active_tab_index);
+                                if self.tabs.is_empty() { self.tabs.push(Tab::new_empty()); }
+                                self.active_tab_index = self.active_tab_index.min(self.tabs.len() - 1);
+                                ui.close();
+                            }
+                        });
+                    });
+                });
+
+                egui::Panel::top("tab_bar").show_inside(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let mut tab_to_close = None;
+                        for (i, tab) in self.tabs.iter().enumerate() {
+                            let is_active = i == self.active_tab_index;
+                            if ui.selectable_label(is_active, tab.name()).clicked() {
+                                self.active_tab_index = i;
+                            }
+                            if ui.small_button("x").clicked() {
+                                tab_to_close = Some(i);
+                            }
+                        }
+                        if let Some(idx) = tab_to_close {
+                            self.tabs.remove(idx);
+                            if self.tabs.is_empty() { self.tabs.push(Tab::new_empty()); }
+                            self.active_tab_index = self.active_tab_index.min(self.tabs.len() - 1);
+                        }
+                    });
+                });
+
+                egui::Panel::bottom("bottom_bar").show_inside(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if self.is_running {
+                            ui.spinner();
+                            ui.label("Running...");
+                        } else {
+                            if ui.button("Run").clicked() {
+                                self.run_execution(ui.ctx().clone());
+                            }
+                        }
+                        ui.checkbox(&mut self.run_all, "Run all open files");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Clear Output").clicked() {
+                                self.output.clear();
+                            }
+                        });
+                    });
+                });
+
+                egui::Panel::right("console_panel").default_size(300.0).resizable(true).show_inside(ui, |ui| {
+                    ui.heading("Console Output");
+                    egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.output)
+                                .font(egui::TextStyle::Monospace)
+                                .desired_width(f32::INFINITY)
+                        );
+                    });
+                });
+
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    let tab = &mut self.tabs[self.active_tab_index];
+                    let theme = monokai_theme();
+                    CodeEditor::default()
+                        .id_source("code_editor")
+                        .with_syntax(python_syntax())
+                        .with_theme(theme)
+                        .with_numlines(true)
+                        .show(ui, &mut tab.content);
+                });
+            }
+        }
+
+        fn python_syntax() -> Syntax {
+            Syntax {
+                language: "Python",
+                case_sensitive: true,
+                comment: "#",
+                comment_multiline: ["\"\"\"", "\"\"\""],
+                hyperlinks: BTreeSet::from(["http", "https"]),
+                keywords: BTreeSet::from(["def", "class", "if", "else", "elif", "for", "while", "return", "import", "from", "as", "try", "except", "finally", "with", "lambda", "yield", "pass", "break", "continue", "in", "is", "not", "and", "or", "None", "True", "False"]),
+                types: BTreeSet::from(["int", "float", "str", "list", "dict", "set", "tuple", "bool"]),
+                special: BTreeSet::from(["self", "cls"]),
+                quotes: BTreeSet::from(['"', '\'']),
+            }
+        }
+
+        fn monokai_theme() -> ColorTheme {
+            ColorTheme {
+                name: "Monokai",
+                dark: true,
+                bg: "#272822",
+                cursor: "#F8F8F2",
+                selection: "#49483E",
+                comments: "#75715E",
+                functions: "#A6E22E",
+                keywords: "#F92672",
+                literals: "#AE81FF",
+                numerics: "#AE81FF",
+                punctuation: "#F8F8F2",
+                strs: "#E6DB74",
+                types: "#66D9EF",
+                special: "#FD971F",
+            }
+        }
+
+        fn main() -> eframe::Result<()> {
+            let options = eframe::NativeOptions {
+                viewport: egui::ViewportBuilder::default()
+                    .with_inner_size([1024.0, 768.0])
+                    .with_title("NovaCibes Editor"),
+                ..Default::default()
+            };
+            eframe::run_native(
+                "NovaCibes Editor",
+                options,
+                Box::new(|cc| Ok(Box::new(NovaCibesApp::new(cc)))),
+            )
+        }
+
+    - path: .github/workflows/build.yml
+      content: |
+        name: Build NovaCibes Python Runner (Universal macOS)
+
+        on:
+          push:
+            branches: [ main, master ]
+          pull_request:
+          workflow_dispatch:
+
+        jobs:
+          build:
+            runs-on: macos-latest
+            strategy:
+              matrix:
+                target: [x86_64-apple-darwin, aarch64-apple-darwin]
+            steps:
+              - name: Checkout repository
+                uses: actions/checkout@v4
+
+              - name: Install Rust toolchain
+                uses: dtolnay/rust-toolchain@stable
+                with:
+                  targets: ${{ matrix.target }}
+
+              - name: Cache Cargo registry + build
+                uses: Swatinem/rust-cache@v2
+
+              - name: Build binary for ${{ matrix.target }}
+                env:
+                  MACOSX_DEPLOYMENT_TARGET: "11.0"
+                run: cargo build --release --target ${{ matrix.target }}
+
+              - name: Install cargo-bundle
+                run: cargo install cargo-bundle
+
+              - name: Create .app bundle for ${{ matrix.target }}
+                run: cargo bundle --release --target ${{ matrix.target }}
+
+              - name: Install create-dmg
+                run: brew install create-dmg
+
+              - name: Create .dmg installer for ${{ matrix.target }}
+                run: |
+                  create-dmg \
+                    --volname "NovaCibes Editor" \
+                    --window-size 600 400 \
+                    --icon-size 100 \
+                    --icon "NovaCibes Editor.app" 200 190 \
+                    --hide-extension "NovaCibes Editor.app" \
+                    --app-drop-link 400 190 \
+                    "NovaCibes-Editor-${{ matrix.target }}.dmg" \
+                    "target/${{ matrix.target }}/release/bundle/osx/NovaCibes Editor.app"
+
+              - name: Upload DMG for ${{ matrix.target }}
+                uses: actions/upload-artifact@v4
+                with:
+                  name: novacibes-editor-${{ matrix.target }}
+                  path: NovaCibes-Editor-${{ matrix.target }}.dmg
+
+          create-universal-dmg:
+            runs-on: macos-latest
+            needs: build
+            steps:
+              - name: Download Intel DMG
+                uses: actions/download-artifact@v4
+                with:
+                  name: novacibes-editor-x86_64-apple-darwin
+                  path: intel
+
+              - name: Download ARM DMG
+                uses: actions/download-artifact@v4
+                with:
+                  name: novacibes-editor-aarch64-apple-darwin
+                  path: arm
+
+              - name: Extract .app bundles from DMGs
+                run: |
+                  mkdir -p intel_mount arm_mount intel_app arm_app universal_app
+                  # Mount Intel DMG and copy .app
+                  hdiutil attach intel/NovaCibes-Editor-x86_64-apple-darwin.dmg -mountpoint intel_mount
+                  cp -R "intel_mount/NovaCibes Editor.app" intel_app/
+                  hdiutil detach intel_mount
+                  # Mount ARM DMG and copy .app
+                  hdiutil attach arm/NovaCibes-Editor-aarch64-apple-darwin.dmg -mountpoint arm_mount
+                  cp -R "arm_mount/NovaCibes Editor.app" arm_app/
+                  hdiutil detach arm_mount
+
+              - name: Create universal binary from the two .app bundles
+                run: |
+                  # Use Intel app as base for universal app
+                  cp -R "intel_app/NovaCibes Editor.app" universal_app/
+
+                  INTEL_BIN="intel_app/NovaCibes Editor.app/Contents/MacOS/NovaCibes Editor"
+                  ARM_BIN="arm_app/NovaCibes Editor.app/Contents/MacOS/NovaCibes Editor"
+                  OUTPUT_BIN="universal_app/NovaCibes Editor.app/Contents/MacOS/NovaCibes Editor"
+
+                  lipo -create "$INTEL_BIN" "$ARM_BIN" -output "$OUTPUT_BIN"
+                  chmod +x "$OUTPUT_BIN"
+
+              - name: Package universal .app into final DMG
+                run: |
+                  brew install create-dmg
+                  create-dmg \
+                    --volname "NovaCibes Editor" \
+                    --window-size 600 400 \
+                    --icon-size 100 \
+                    --icon "NovaCibes Editor.app" 200 190 \
+                    --hide-extension "NovaCibes Editor.app" \
+                    --app-drop-link 400 190 \
+                    "NovaCibes-Editor-universal.dmg" \
+                    "universal_app/NovaCibes Editor.app"
+
+              - name: Upload universal DMG
+                uses: actions/upload-artifact@v4
+                with:
+                  name: novacibes-editor-universal
+                  path: NovaCibes-Editor-universal.dmg
+
+          release:
+            if: startsWith(github.ref, 'refs/tags/')
+            needs: create-universal-dmg
+            runs-on: ubuntu-latest
+            steps:
+              - name: Download universal DMG
+                uses: actions/download-artifact@v4
+                with:
+                  name: novacibes-editor-universal
+                  path: release-artifacts
+
+              - name: Create GitHub Release
+                uses: softprops/action-gh-release@v2
+                with:
+                  files: release-artifacts/NovaCibes-Editor-universal.dmg
+                env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
