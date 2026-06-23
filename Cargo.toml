@@ -34,3 +34,12 @@ main = true
 
 [package.metadata.packager.macos]
 minimum_system_version = "11.0"
+
+[package.metadata.bundle]
+name = "NovaCibes Editor"
+identifier = "com.novacibes.editor"
+version = "0.1.0"
+copyright = "Copyright © 2024. All rights reserved."
+category = "DeveloperTool"
+short_description = "A native macOS code editor that runs Python via a remote API."
+long_description = "A native macOS code editor that runs Python via a remote API."
